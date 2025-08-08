@@ -26,7 +26,48 @@ class Cloud_Backup_UI {
     }
 
     public function render_settings_page() {
-        // Gestion du retour OAuth
+        
+        
+        
+
+        
+        if (!empty($_POST['cloud_backup_chunk_mb'])) {
+            if (!isset($_POST['cloud_backup_nonce']) || !wp_verify_nonce($_POST['cloud_backup_nonce'], 'cloud_backup_settings')) {
+                add_settings_error('cloud_backup_pro', 'bad_nonce', 'Sécurité: nonce invalide.', 'error');
+            } else {
+                $v = max(1, min(64, intval($_POST['cloud_backup_chunk_mb'])));
+                update_option('cloud_backup_chunk_mb', $v, false);
+                add_settings_error('cloud_backup_pro', 'chunk_saved', 'Taille des chunks enregistrée (' . $v . ' Mo).', 'updated');
+            }
+        }
+// --- Connection status banner ---
+        $token = get_option('cloud_backup_gdrive_token', array());
+        $connected = false;
+        if (is_array($token) && !empty($token['access_token'])) {
+            $exp = isset($token['expires_at']) ? intval($token['expires_at']) : 0;
+            $connected = ($exp === 0) || ($exp > time());
+        }
+        if ($connected) {
+            echo '<div class="notice notice-success"><p>✅ Connecté à Google Drive.</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>❌ Non connecté à Google Drive.</p></div>';
+        }
+        if (isset($_GET['oauth']) && $_GET['oauth'] === 'ok') {
+            echo '<div class="updated notice"><p>Connexion Google Drive réussie.</p></div>';
+        }
+
+if (isset($_GET['cloud_revoked']) && $_GET['cloud_revoked'] === '1') {
+            echo '<div class="updated notice"><p>Connexion Google Drive révoquée.</p></div>';
+        }
+// Gestion révocation Google Drive
+        if (!empty($_POST['cloud_backup_revoke'])) {
+            if (!isset($_POST['cloud_backup_nonce']) || !wp_verify_nonce($_POST['cloud_backup_nonce'], 'cloud_backup_settings')) {
+                add_settings_error('cloud_backup_pro', 'bad_nonce', 'Sécurité: nonce invalide.', 'error');
+            } else {
+                if (class_exists('Cloud_Backup_Auth')) { Cloud_Backup_Auth::revoke(); }
+            }
+        }
+// Gestion du retour OAuth
         if (class_exists('Cloud_Backup_Auth')) { Cloud_Backup_Auth::handle_oauth_return(); }
         if (!empty($_POST['cloud_backup_manual_trigger'])) {
             if (!isset($_POST['cloud_backup_nonce']) || !wp_verify_nonce($_POST['cloud_backup_nonce'], 'cloud_backup_manual')) {
@@ -87,6 +128,22 @@ if (!empty($token['access_token'])) {
 }
 ?>
                 <table class="form-table">
+            <tr valign="top">
+                <th scope="row">Taille des chunks (Mo)</th>
+                <td>
+                    <?php $chunk = intval(get_option('cloud_backup_chunk_mb', 5)); ?>
+                    <input type="number" name="cloud_backup_chunk_mb" value="<?php echo esc_attr($chunk); ?>" min="1" max="64" />
+                    <p class="description">Taille des morceaux utilisés pour l’upload résumable (1–64 Mo, défaut 5).</p>
+                </td>
+            </tr>
+                <tr valign="top">
+                    <th scope="row">Révocation Google Drive</th>
+                    <td>
+                        <?php $revoke_url = wp_nonce_url(admin_url('admin-post.php?action=cloud_backup_revoke'), 'cloud_backup_revoke'); ?>
+                        <a href="<?php echo esc_url($revoke_url); ?>" class="button button-secondary" onclick="return confirm('Révoquer la connexion Google Drive ?')">Révoquer la connexion</a>
+                        <p class="description">Révoque le token stocké localement et tente une révocation côté Google.</p>
+                    </td>
+                </tr>
                     <tr valign="top">
                         <th scope="row">Nom du fichier de sauvegarde</th>
                         <td>

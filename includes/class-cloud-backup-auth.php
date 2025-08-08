@@ -1,6 +1,48 @@
 <?php
 
 class Cloud_Backup_Auth {
+
+    public static function handle_revoke() {
+        if (!current_user_can('manage_options')) {
+            wp_die(__('Insufficient permissions.'));
+        }
+        check_admin_referer('cloud_backup_revoke');
+        self::revoke();
+        $url = add_query_arg(array('page' => 'cloud-backup-pro', 'cloud_revoked' => '1'), admin_url('options-general.php'));
+        wp_safe_redirect($url);
+        exit;
+    }
+
+
+    /**
+     * Révoque la connexion Google Drive :
+     * - tente une révocation côté Google (refresh_token prioritaire, sinon access_token)
+     * - supprime l'option locale
+     * - affiche un message de confirmation
+     */
+    public static function revoke() {
+        $opt_name = self::OPTION_TOKEN;
+        $token = get_option($opt_name, array());
+        $token_to_revoke = '';
+        if (is_array($token)) {
+            if (!empty($token['refresh_token'])) { $token_to_revoke = $token['refresh_token']; }
+            elseif (!empty($token['access_token'])) { $token_to_revoke = $token['access_token']; }
+        }
+        if (!empty($token_to_revoke)) {
+            $resp = wp_remote_post('https://oauth2.googleapis.com/revoke', array(
+                'headers' => array('Content-Type' => 'application/x-www-form-urlencoded'),
+                'body'    => array('token' => $token_to_revoke),
+                'timeout' => 15,
+            ));
+            // Pas bloquant si échec de l'API revoke
+        }
+        delete_option($opt_name);
+        if (function_exists('add_settings_error')) {
+            add_settings_error('cloud_backup_pro', 'oauth_revoked', 'Connexion Google Drive révoquée.', 'updated');
+        }
+        return true;
+    }
+
     private static function log($msg){ if (defined('WP_DEBUG') && WP_DEBUG) { error_log('[CloudBackupAuth] ' . $msg); } }
 
     const OPTION_TOKEN = 'cloud_backup_gdrive_token'; // stores array: access_token, refresh_token, expires_at
@@ -95,6 +137,10 @@ class Cloud_Backup_Auth {
                 'expires_at' => time() + max(60, $expires_in - 60),
             );
             update_option(self::OPTION_TOKEN, $token, false);
+            // Redirect to clean URL to avoid code reuse on refresh
+            $clean = add_query_arg('oauth', 'ok', admin_url('options-general.php?page=cloud-backup-pro'));
+            wp_safe_redirect($clean);
+            exit;
             return true;
         }
 

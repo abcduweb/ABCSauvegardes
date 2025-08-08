@@ -32,6 +32,7 @@ register_deactivation_hook(__FILE__, function () {
 
 // Exécuter la sauvegarde quand le cron se déclenche
 add_action('cloud_backup_cron_hook', 'cloud_backup_pro_run_backup');
+add_action('admin_post_cloud_backup_revoke', array('Cloud_Backup_Auth', 'handle_revoke'));
 
 // Toujours intercepter le retour OAuth2 en admin
 function cloud_backup_auth_admin_init() {
