@@ -3,6 +3,7 @@
  * Plugin Name: ABC-maintenance
  * Version: 1.0
  * Author: Adrien Dubois (SAS ABCduWeb)
+ * Description: Plugin permettant la sauvegarde de son site internet sur Google Drive.
  */
 
 defined('ABSPATH') || exit;

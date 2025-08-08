@@ -63,7 +63,8 @@ class Cloud_Backup_Pro {
         // === End guard ===
 
         // Upload vers Google Drive (résumable, streaming par chunks)
-        if (!self::upload_resumable_to_drive($backup_file, $access_token, basename($backup_file))) {
+            $folder_path = trim(get_option('cloud_backup_gdrive_path', ''));
+    if (!self::upload_resumable_to_drive($backup_file, $access_token, basename($backup_file), $folder_path)) {
             error_log('⚠️ Échec upload résumable Google Drive.');
             return;
         } else {
@@ -71,10 +72,79 @@ class Cloud_Backup_Pro {
         }
     }
 
+
+    /**
+     * Ensure a nested Google Drive folder exists. Returns folder ID or null (root).
+     * $folder_path: e.g. "CloudBackups/SiteA"
+     */
+    private static function ensure_drive_folder($access_token, $folder_path) {
+        $folder_path = trim($folder_path);
+        if ($folder_path === '') return null;
+        $parts = array_values(array_filter(array_map('trim', explode('/', $folder_path)), function($v){ return $v !== ''; }));
+        if (empty($parts)) return null;
+
+        $parent = 'root';
+        foreach ($parts as $name) {
+            // Search for existing folder with this name under $parent
+            $q = sprintf("name = '%s' and mimeType = 'application/vnd.google-apps.folder' and '%s' in parents and trashed = false", str_replace("'", "\\'", $name), $parent);
+            $url = add_query_arg(array(
+                'q' => $q,
+                'spaces' => 'drive',
+                'fields' => 'files(id,name)',
+                'pageSize' => 1,
+            ), 'https://www.googleapis.com/drive/v3/files');
+
+            $resp = wp_remote_get($url, array(
+                'headers' => array('Authorization' => 'Bearer ' . $access_token),
+                'timeout' => 20,
+            ));
+            if (is_wp_error($resp)) {
+                error_log('[CloudBackup] Drive search error: ' . $resp->get_error_message());
+                return null;
+            }
+            $code = wp_remote_retrieve_response_code($resp);
+            $body = json_decode(wp_remote_retrieve_body($resp), true);
+            $found_id = null;
+            if ($code >= 200 && $code < 300 && isset($body['files'][0]['id'])) {
+                $found_id = $body['files'][0]['id'];
+            }
+            if ($found_id) {
+                $parent = $found_id;
+                continue;
+            }
+            // Create folder
+            $create = wp_remote_post('https://www.googleapis.com/drive/v3/files', array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $access_token,
+                    'Content-Type' => 'application/json; charset=UTF-8',
+                ),
+                'body' => wp_json_encode(array(
+                    'name' => $name,
+                    'mimeType' => 'application/vnd.google-apps.folder',
+                    'parents' => $parent === 'root' ? array('root') : array($parent),
+                )),
+                'timeout' => 20,
+            ));
+            if (is_wp_error($create)) {
+                error_log('[CloudBackup] Drive create folder error: ' . $create->get_error_message());
+                return null;
+            }
+            $c_code = wp_remote_retrieve_response_code($create);
+            $c_body = json_decode(wp_remote_retrieve_body($create), true);
+            if ($c_code >= 200 && $c_code < 300 && !empty($c_body['id'])) {
+                $parent = $c_body['id'];
+            } else {
+                error_log('[CloudBackup] Drive create folder failed HTTP ' . $c_code . ' body=' . wp_remote_retrieve_body($create));
+                return null;
+            }
+        }
+        return $parent === 'root' ? null : $parent;
+    }
+
     /**
      * Upload Google Drive via Resumable Upload (chunked) with progress + retries.
      */
-    private static function upload_resumable_to_drive($backup_file, $access_token, $filename = null) {
+    private static function upload_resumable_to_drive($backup_file, $access_token, $filename = null, $folder_path = '') {
         if (!file_exists($backup_file)) { error_log('[CloudBackup] Fichier introuvable: ' . $backup_file); return false; }
         if ($filename === null) { $filename = basename($backup_file); }
 
@@ -89,7 +159,10 @@ class Cloud_Backup_Pro {
                 'Authorization' => 'Bearer ' . $access_token,
                 'Content-Type'  => 'application/json; charset=UTF-8',
             ),
-            'body' => wp_json_encode(array('name' => $filename)),
+            'body' => wp_json_encode(array_filter(array(
+                'name' => $filename,
+                'parents' => ($folder_path && ($fid = self::ensure_drive_folder($access_token, $folder_path))) ? array($fid) : null,
+            ))),
             'timeout' => 30,
         ));
         if (is_wp_error($init)) { error_log('[CloudBackup] Init résumable: ' . $init->get_error_message()); return false; }
